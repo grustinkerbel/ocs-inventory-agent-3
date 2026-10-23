@@ -147,9 +147,11 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 - On the target Mac, `config.json` and the setup logs are restricted to root (`0600`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
 - The temporary keychain (when using `.p12` files) is deleted and your keychain search list is restored on exit.
 
-## Known issue
+## Older `install.sh` versions
 
-`check_install_sh_layout` warns if `install.sh` references `$plist_source_file` before `register_service()` defines it. Under `set -u`, `install.sh` then aborts in silent mode whenever it finds an existing agent. Fresh installs are unaffected; re-installs fail until that line is fixed upstream.
+Some older revisions of `install.sh` referenced `$plist_source_file`, a local variable of `register_service()`, from `check_installed_agent()`. Under `set -u`, that aborted silent mode whenever an existing agent was found, so re-installs failed while fresh installs worked.
+
+Current `main` no longer has this problem: `check_installed_agent()` uses the global `PLIST_DST`. The build still runs `check_install_sh_layout` and prints a warning if the pinned `OCS_REF` contains the old pattern. If you see that warning, build from a newer ref or a commit that includes the fix.
 
 ## Troubleshooting
 
@@ -176,4 +178,3 @@ Add `ocs-build.conf` to `.gitignore`. It holds your signing identities and, pote
 ```
 ocs-build.conf
 ```
-
