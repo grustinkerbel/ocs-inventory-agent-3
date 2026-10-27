@@ -418,6 +418,40 @@ inject_setup_values() {
   grep -q 'Values injected by ocs-build.sh' "$f" || die "Injection marker missing after edit."
 }
 
+fix_plist_service_arg() {
+  # $1 = staged LaunchDaemon plist. Upstream passes the service flag as two
+  # ProgramArguments entries ("--service", "true"). The agent only honours the
+  # documented "--service=true" form: with the two-entry form it runs once,
+  # exits 0, and launchd never gets a resident agent. Merge the pair into one
+  # "--service=<value>" entry. Idempotent: does nothing if upstream already fixed it.
+  local f="$1" pb=/usr/libexec/PlistBuddy i=0 val next
+  [ -f "$f" ] || return 0
+  [ -x "$pb" ] || die "PlistBuddy not found; cannot correct $PLIST_NAME."
+
+  while val="$("$pb" -c "Print :ProgramArguments:$i" "$f" 2>/dev/null)"; do
+    case "$val" in
+      --service=*)
+        info "$PLIST_NAME already uses '$val'; nothing to correct."
+        return 0 ;;
+      --service)
+        next="$("$pb" -c "Print :ProgramArguments:$((i + 1))" "$f" 2>/dev/null)" \
+          || die "$PLIST_NAME has '--service' as its last argument, with no value after it."
+        case "$next" in
+          true|false) ;;
+          *) die "$PLIST_NAME: expected true or false after '--service', found '$next'." ;;
+        esac
+        "$pb" -c "Set :ProgramArguments:$i --service=$next" "$f" \
+          && "$pb" -c "Delete :ProgramArguments:$((i + 1))" "$f" \
+          || die "Could not rewrite --service in $PLIST_NAME."
+        plutil -lint "$f" >/dev/null || die "$PLIST_NAME is invalid after the --service fix."
+        info "Corrected $PLIST_NAME: '--service $next' -> '--service=$next'."
+        return 0 ;;
+    esac
+    i=$((i + 1))
+  done
+  warn "No --service argument found in $PLIST_NAME ProgramArguments; left unchanged. Check the plist layout upstream."
+}
+
 find_credential_files() {
   # Files under the given directories that contain the password, either raw or in the
   # shell-escaped (%q) form that inject_setup_values writes into install.sh.
@@ -580,7 +614,10 @@ build_arch() {
   rm -f "$setup_dst/$BINARY_NAME" "$setup_dst/install.log" "$setup_dst/uninstall.log"
   find "$share_dst" -name '.DS_Store' -delete
   find "$share_dst" -type f -name '*.sh' -exec chmod 0755 {} +
-  [ -f "$setup_dst/$PLIST_NAME" ] && chmod 0644 "$setup_dst/$PLIST_NAME"
+  if [ -f "$setup_dst/$PLIST_NAME" ]; then
+    fix_plist_service_arg "$setup_dst/$PLIST_NAME"
+    chmod 0644 "$setup_dst/$PLIST_NAME"
+  fi
 
   # Inject URL/USERNAME/PASSWORD/SILENT(/SERVICE/NOW) into the STAGED install.sh only.
   check_install_sh_layout "$setup_dst/install.sh"
