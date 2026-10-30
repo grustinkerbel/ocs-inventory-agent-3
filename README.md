@@ -8,10 +8,11 @@ It targets macOS's stock `/bin/bash` 3.2, so no Homebrew bash is needed.
 
 1. Fetches a Dart SDK (SHA-256 verified) or uses the system one
 2. Fetches the `OCSInventory-Agent-Rework` source at a pinned ref (branch, tag, or commit SHA)
-3. Runs `dart pub get` and `dart compile exe`
-4. Signs every Mach-O with **Developer ID Application** (hardened runtime, secure timestamp)
-5. Builds the package with `pkgbuild` / `productbuild`, signed with **Developer ID Installer**
-6. Notarizes with `notarytool`, staples, and validates
+3. Applies small local fixes to the fresh checkout (currently the LaunchDaemon plist, see [Local source fixes](#local-source-fixes))
+4. Runs `dart pub get` and `dart compile exe`
+5. Signs every Mach-O with **Developer ID Application** (hardened runtime, secure timestamp)
+6. Builds the package with `pkgbuild` / `productbuild`, signed with **Developer ID Installer**
+7. Notarizes with `notarytool`, staples, and validates
 
 A build manifest (SHA-256, source commit, Dart version, etc.) and the resolved `pubspec.lock` are written next to each package.
 
@@ -28,9 +29,10 @@ The repository's `setup/macos` folder (`install.sh`, `uninstall.sh`, `com.ocsinv
 ```
 
 - The package installs **nothing** into `/usr/local/bin`. `install.sh` makes that single copy.
-- `URL`, `USERNAME`, `PASSWORD`, `SILENT` (and optionally `SERVICE`, `NOW`) from the config are injected into the **staged** copy of `install.sh` at build time. The source checkout is never modified, and command-line options passed to `install.sh` still win.
-- The package's `postinstall` runs `install.sh` non-interactively, then verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
-- The build verifies that the binary appears exactly once in the payload and that the credentials appear only in `install.sh`.
+- **`install.sh` is shipped exactly as upstream wrote it.** The build never edits it and fails if the staged copy differs from the checkout.
+- `URL`, `USERNAME`, `PASSWORD` (and optionally `SERVICE`, `NOW`) from the config are baked into the generated `postinstall` script as command-line arguments. The package's `postinstall` runs `install.sh -S -U <url> -u <user> -p <password> [-s] [-n]` non-interactively. (A `.pkg` cannot receive arguments at install time, so they are fixed at build time. Environment variables cannot be used because `install.sh` resets its variables on startup.)
+- After `install.sh` finishes, `postinstall` verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
+- The build verifies that the binary appears exactly once in the payload and that the credentials appear only in the `postinstall` script.
 
 ## Requirements
 
@@ -112,15 +114,15 @@ Never put passwords or private keys in the config file. Secrets are read from en
 
 | Key | Meaning |
 |---|---|
-| `SILENT=true` | The postinstall runs `install.sh` with the baked-in values. `URL`, `USERNAME`, `PASSWORD` are required. |
+| `SILENT=true` | The postinstall runs `install.sh` with the baked-in values as arguments (`-S -U -u -p`). `URL`, `USERNAME`, `PASSWORD` are required. |
 | `SILENT=false` | The package only installs files; nothing is configured. |
-| `SERVICE=true` | Register the LaunchDaemon. Without it, silent mode installs and configures the agent but **never schedules it**. |
-| `NOW=true` | Run one inventory right after install. |
+| `SERVICE=true` | Passes `-s` to `install.sh` to register the LaunchDaemon. Without it, silent mode installs and configures the agent but **never schedules it**. |
+| `NOW=true` | Passes `-n` to `install.sh` to run one inventory right after install. |
 
 Validation rules enforced at build time:
 
 - `URL` must start with `http://` or `https://`
-- `URL`, `USERNAME`, `PASSWORD` must not contain `"`, `\`, or line breaks (`install.sh` writes them into `config.json` unescaped)
+- `URL`, `USERNAME`, `PASSWORD` must not contain `"`, `\`, or line breaks (the upstream `install.sh` writes them into `config.json` unescaped)
 - With `NOW=true` they must also contain no whitespace or any of `* ? [ $ \``, because `install.sh` passes them unquoted to a command
 
 ### Entitlements
@@ -139,19 +141,26 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 
 ## Security notes
 
-- With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`** (in `install.sh`, mode `0700 root:wheel` once installed).
+- With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`**, in the `postinstall` script. `install.sh` itself contains no credentials.
+- While `install.sh` runs on the target Mac, the password is briefly visible in the process list as a command-line argument.
 - The package is **uploaded to Apple** for notarization.
 - Anyone who can obtain the `.pkg` (for example from a Jamf distribution point) can read the credentials.
 - **Use a dedicated, low-privilege OCS account.**
 - Changing any value means rebuilding, re-signing, and re-notarizing.
-- On the target Mac, `config.json` and the setup logs are restricted to root (`0600`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
+- On the target Mac, `config.json` and the setup logs are restricted to root (`0600`; `install.sh`'s `--now` run writes the password into `install.log`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
 - The temporary keychain (when using `.p12` files) is deleted and your keychain search list is restored on exit.
 
-## Older `install.sh` versions
+## Local source fixes
 
-Some older revisions of `install.sh` referenced `$plist_source_file`, a local variable of `register_service()`, from `check_installed_agent()`. Under `set -u`, that aborted silent mode whenever an existing agent was found, so re-installs failed while fresh installs worked.
+Right after the source is fetched, and before anything is compiled or staged, the build applies small fixes to the checkout (`apply_source_fixes` in `ocs-build.sh`). The packaging code does not know about them; it just uses whatever is in the checkout, so you can tweak the code without touching the package build.
 
-Current `main` no longer has this problem: `check_installed_agent()` uses the global `PLIST_DST`. The build still runs `check_install_sh_layout` and prints a warning if the pinned `OCS_REF` contains the old pattern. If you see that warning, build from a newer ref or a commit that includes the fix.
+| Fix | What it does |
+|---|---|
+| LaunchDaemon plist ([upstream issue #175](https://github.com/OCSInventory-NG/OCSInventory-Agent-Rework/issues/175)) | Changes `<string>--service true</string>` to `<string>--service=true</string>` in `setup/macos/com.ocsinventory.agent.plist`, because upstream passes it as a single argument the agent cannot parse. |
+
+The plist fix is idempotent. If the plist already uses `--service=true`, it does nothing. If neither form is found, it prints a warning and leaves the file unchanged. After patching it checks the result and runs `plutil -lint`.
+
+To add another fix, write a function in the "Source" section of `ocs-build.sh` and call it from `apply_source_fixes`. Keep each fix idempotent.
 
 ## Troubleshooting
 
@@ -164,6 +173,9 @@ Current `main` no longer has this problem: `check_installed_agent()` uses the gl
 | Notarization not `Accepted` | The script prints Apple's log automatically; check for unsigned or missing hardened-runtime Mach-O files |
 | `x86_64 build on Apple silicon needs Rosetta` | `softwareupdate --install-rosetta --agree-to-license` |
 | `SHA-256 mismatch` for the Dart SDK | Re-run with `--clean`; check for proxy interference |
+| `Staged install.sh differs from the upstream copy` | Something modified `setup/macos/install.sh` between checkout and staging. The build requires it to be unmodified. |
+| Warning: plist has no `--service` argument in the expected form | Upstream changed the plist. Review `setup/macos/com.ocsinventory.agent.plist` in the checkout and update `fix_plist_service_arg` or remove it. |
+| `Credential placement check failed` | The password was found somewhere other than the `postinstall` script, for example because it is a short string that also appears in another file. |
 
 ## Repository layout
 
