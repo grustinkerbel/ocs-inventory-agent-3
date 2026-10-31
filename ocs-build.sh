@@ -569,7 +569,7 @@ build_arch() {
 
   local out_bin="$WORK_DIR/build/$arch/$BINARY_NAME"
   mkdir -p "$WORK_DIR/build/$arch"
-  ( cd "$SRC_DIR" && run_dart pub get && run_dart compile exe lib/app/app.dart -o "$out_bin" ) \
+  ( cd "$SRC_DIR" && run_dart pub get && run_dart compile exe -DAPP_VERSION="$PKG_VERSION_RESOLVED" lib/app/app.dart -o "$out_bin" ) \
     || die "Dart build failed for $arch"
   [ "$(lipo -archs "$out_bin")" = "$arch" ] \
     || die "Built binary architecture is '$(lipo -archs "$out_bin")', expected '$arch'."
