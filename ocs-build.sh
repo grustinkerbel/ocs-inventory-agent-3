@@ -16,9 +16,10 @@
 # com.ocsinventory.agent.plist) is installed under
 #   /usr/local/share/ocsinventory-agent/setup/macos/
 # together with the signed binary, in the SAME folder. The package installs
-# nothing into /usr/local/bin: install.sh does that single copy. URL, USERNAME,
-# PASSWORD, SILENT (and optionally SERVICE, NOW) from ocs-build.conf are injected
-# into the staged install.sh at build time, and the package's postinstall runs it.
+# nothing into /usr/local/bin: install.sh does that single copy. install.sh is
+# shipped EXACTLY as upstream (verified byte-for-byte at build time). URL,
+# USERNAME, PASSWORD (and optionally SERVICE, NOW) from ocs-build.conf are baked
+# into generated postinstall arguments, and postinstall runs install.sh with them.
 #
 # Targets macOS's stock /bin/bash 3.2 — keep it that way (no bash 4 features).
 # Settings live in ocs-build.conf. See --help.
@@ -442,64 +443,41 @@ resolve_pkg_version() {
 
 PLIST_NAME="com.ocsinventory.agent.plist"
 
-inject_setup_values() {
-  # $1 = staged install.sh. Inserts the config values just before the
-  # "Guards" section, i.e. after the defaults and command-line parsing, so
-  # anything given on the command line still wins.
-  local f="$1" marker='### ---------- Guards ----------' blk
-  grep -qxF "$marker" "$f" \
-    || die "install.sh has no '$marker' line, so setup values cannot be injected (did the script layout change?)."
-  blk="### ---------- Values injected by ocs-build.sh (command-line options still win) ----------"$'\n'
-  if [ "$SILENT" = "true" ]; then
-    blk="${blk}SILENT=\"true\""$'\n'
-    blk="${blk}$(printf 'if [[ -z "$URL" ]]; then URL=%q; fi' "$URL")"$'\n'
-    blk="${blk}$(printf 'if [[ -z "$USERNAME" ]]; then USERNAME=%q; fi' "$USERNAME")"$'\n'
-    blk="${blk}$(printf 'if [[ -z "$PASSWORD" ]]; then PASSWORD=%q; fi' "$PASSWORD")"$'\n'
-    if [ "$SERVICE" = "true" ]; then blk="${blk}"'if [[ "$SERVICE" = "false" ]]; then SERVICE="true"; fi'$'\n'; fi
-    if [ "$NOW" = "true" ]; then blk="${blk}"'if [[ "$NOW" = "false" ]]; then NOW="true"; fi'$'\n'; fi
-  fi
-  blk="${blk}### ---------- end injected values ----------"$'\n'
-  # ENVIRON keeps backslashes and $ in the values verbatim (awk -v would not).
-  BLK="$blk" MARKER="$marker" awk '
-    $0 == ENVIRON["MARKER"] { printf "%s\n", ENVIRON["BLK"] }
-    { print }' "$f" > "$f.new" || die "Injecting setup values failed."
-  mv "$f.new" "$f"
-  bash -n "$f" || die "install.sh no longer parses after injecting the setup values."
-  grep -q 'Values injected by ocs-build.sh' "$f" || die "Injection marker missing after edit."
-}
-
 find_credential_files() {
   # Files under the given directories that contain the password, either raw or in the
-  # shell-escaped (%q) form that inject_setup_values writes into install.sh.
+  # shell-escaped (%q) form that write_postinstall writes into postinstall.
   local pw_q
   pw_q="$(printf '%q' "$PASSWORD")"
   grep -rlF -e "$PASSWORD" -e "$pw_q" "$@" 2>/dev/null || true
 }
 
-check_install_sh_layout() {
-  # Warn about a latent problem in install.sh: a reference to the local variable
-  # $plist_source_file outside register_service(). With "set -u" that aborts
-  # silent runs on a Mac that already has an agent.
-  local f="$1" rs
-  rs="$(grep -n '^register_service()' "$f" | head -n1 | cut -d: -f1)"
-  if [ -n "$rs" ] && awk -v rs="$rs" 'NR < rs && /plist_source_file/ && $0 !~ /^[[:space:]]*#/ { found = 1 } END { exit !found }' "$f"; then
-    warn "install.sh uses \$plist_source_file before register_service() defines it (see check_installed_agent). Under 'set -u' install.sh aborts at that line whenever its silent mode finds an existing agent, so re-installing over an existing agent fails until that line is fixed. Fresh installs are unaffected. The package's postinstall defers entirely to install.sh and only reports its exit status."
+INSTALL_ARGS=()
+build_install_args() {
+  INSTALL_ARGS=()
+  if [ "$SILENT" = "true" ]; then
+    INSTALL_ARGS=(-S -U "$URL" -u "$USERNAME" -p "$PASSWORD")
+    if [ "$SERVICE" = "true" ]; then INSTALL_ARGS+=(-s); fi
+    if [ "$NOW" = "true" ]; then INSTALL_ARGS+=(-n); fi
   fi
 }
 
 write_postinstall() {
-  # Build-time flags are baked in with %q; the body is static and contains NO credentials
-  # (the values live only in the staged install.sh).
+  # Build-time flags and the install.sh arguments are baked in with %q; the body is static.
   {
     echo '#!/bin/bash'
     printf 'RUN_SETUP=%q\n' "$SILENT"
     printf 'BINARY_NAME=%q\n' "$BINARY_NAME"
     printf 'PLIST_NAME=%q\n' "$PLIST_NAME"
+    local a
+    printf 'INSTALL_ARGS=('
+    for a in ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}; do printf ' %q' "$a"; done
+    printf ' )\n'
     cat <<'EOF'
 # Package postinstall (runs as root; installer passes $3 = target volume).
 # 1. normalises ownership/permissions of the staged setup folder
-# 2. runs install.sh (values were injected at build time) -> it copies the binary
-#    from this folder to /usr/local/bin, writes config, optionally registers the service.
+# 2. runs the unmodified upstream install.sh with arguments baked in at build time
+#    -> it copies the binary from this folder to /usr/local/bin, writes config,
+#    optionally registers the service.
 #    install.sh alone decides how to handle an existing agent (reinstall, removal of
 #    old startup items/plist, ...); this script never uninstalls or blocks.
 # 3. verifies the installed binary is the signed one from this package
@@ -522,8 +500,7 @@ chown -R root:wheel "$SHARE"
 [ -f "$SETUP/uninstall.sh" ]     && chmod 0755 "$SETUP/uninstall.sh"
 [ -f "$SETUP/$BINARY_NAME" ]     && chmod 0755 "$SETUP/$BINARY_NAME"
 [ -f "$SETUP/$PLIST_NAME" ]      && chmod 0644 "$SETUP/$PLIST_NAME"
-# install.sh may contain the server credentials: readable by root only.
-[ -f "$SETUP/install.sh" ]       && chmod 0700 "$SETUP/install.sh"
+[ -f "$SETUP/install.sh" ]       && chmod 0755 "$SETUP/install.sh"
 
 # /usr/local/bin may not exist on a clean Apple silicon Mac; install.sh's
 # "cp <binary> /usr/local/bin" would then create a FILE named "bin". Create the
@@ -554,8 +531,8 @@ fi
 
 # --- run install.sh ---------------------------------------------------------------------------
 cd "$SETUP" || { log "ERROR: cannot cd to $SETUP"; exit 1; }
-log "Running install.sh (non-interactive; stdin closed)."
-./install.sh < /dev/null >> "$LOG_FILE" 2>&1
+log "Running install.sh (non-interactive; stdin closed; arguments are not logged)."
+/bin/bash ./install.sh "${INSTALL_ARGS[@]}" < /dev/null >> "$LOG_FILE" 2>&1
 rc=$?
 # install.sh's --now path writes the full agent command line, password included, to
 # install.log. Keep the setup logs readable by root only.
@@ -632,10 +609,10 @@ build_arch() {
   find "$share_dst" -type f -name '*.sh' -exec chmod 0755 {} +
   [ -f "$setup_dst/$PLIST_NAME" ] && chmod 0644 "$setup_dst/$PLIST_NAME"
 
-  # Inject URL/USERNAME/PASSWORD/SILENT(/SERVICE/NOW) into the STAGED install.sh only.
-  check_install_sh_layout "$setup_dst/install.sh"
-  inject_setup_values "$setup_dst/install.sh"
-  if [ "$SILENT" = "true" ]; then chmod 0700 "$setup_dst/install.sh"; fi
+  # install.sh ships exactly as upstream wrote it: no injection, no edits.
+  cmp -s "$SRC_DIR/setup/macos/install.sh" "$setup_dst/install.sh" \
+    || die "Staged install.sh differs from the upstream copy; it must not be modified."
+  build_install_args
 
   # The binary lives in the same folder as install.sh; install.sh copies it to
   # /usr/local/bin. The package itself installs NOTHING into /usr/local/bin.
@@ -655,15 +632,15 @@ build_arch() {
   done < <(find "$payload" -type f)
   sign_file "$main" "$BINARY_CODESIGN_ID" "$ENTITLEMENTS_FILE"
 
-  # ---- payload sanity: single binary, nothing in /usr/local/bin, credentials only in install.sh
+  # ---- payload sanity: single binary, nothing in /usr/local/bin, credentials only in postinstall
   [ ! -e "$payload/usr/local/bin" ] || die "Payload must not contain /usr/local/bin (install.sh installs the binary)."
   if [ "$SILENT" = "true" ]; then
     local leaks
     leaks="$(find_credential_files "$payload" "$stage/scripts")"
-    if [ "$leaks" != "$setup_dst/install.sh" ]; then
+    if [ "$leaks" != "$stage/scripts/postinstall" ]; then
       die "Credential placement check failed; files containing the password:"$'\n'"$leaks"
     fi
-    info "Credentials appear only in the staged install.sh (mode $(stat -f '%Lp' "$setup_dst/install.sh"))."
+    info "Credentials appear only in the generated postinstall script; install.sh is unmodified upstream."
   fi
 
   # ---- package -------------------------------------------------------------
@@ -784,7 +761,7 @@ EOF
     echo "pkg version:    $PKG_VERSION_RESOLVED"
     echo "architecture:   $arch"
     if [ "$SILENT" = "true" ]; then
-      echo "setup values:   baked into install.sh (silent=true, url=$URL, username=$USERNAME, service=$SERVICE, now=$NOW; password NOT recorded here)"
+      echo "setup values:   baked into postinstall as install.sh arguments (silent=true, url=$URL, username=$USERNAME, service=$SERVICE, now=$NOW; password NOT recorded here)"
     else
       echo "setup values:   none (SILENT=false; setup not run by the package)"
     fi
