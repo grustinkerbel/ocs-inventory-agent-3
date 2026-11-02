@@ -61,10 +61,6 @@ OCS_REPO_URL="https://github.com/OCSInventory-NG/OCSInventory-Agent-Rework.git"
 # builds; "main" moves.
 OCS_REF="main"
 
-# Note: after checkout, ocs-build.sh applies small local fixes to the source before
-# building (currently: the LaunchDaemon plist's "--service true" -> "--service=true",
-# upstream issue #175). Nothing to configure here; see apply_source_fixes in the script.
-
 # "download" = fetch an official Dart SDK zip (checksum-verified) into WORK_DIR.
 # "system"   = use whatever `dart` is on PATH (host architecture only).
 DART_SOURCE="download"
@@ -84,19 +80,43 @@ BINARY_NAME="ocsinventory-cli"                 # installed to /usr/local/bin/
 BINARY_CODESIGN_ID="com.ocsinventory.agent.cli"  # code signing identifier
 PKG_IDENTIFIER="com.ocsinventory.agent"        # package receipt identifier
 PKG_TITLE="OCS Inventory Agent"
-PKG_VERSION="auto"          # "auto" = version from pubspec.yaml, else build date
+PKG_VERSION="auto"          # "auto" = version from pubspec.yaml, else build date.
+                            # Also passed to the compiled binary as -DAPP_VERSION.
 
 # Optional entitlements plist for the main binary. Leave empty (recommended)
 # unless testing proves the hardened runtime blocks something specific.
 ENTITLEMENTS_FILE="dart_entitlements.plist"
 
 ###############################################################################
+# 5a. INSTALLER LOGO (optional)
+###############################################################################
+# A PNG shown as the installer window's background image. Leave LOGO_FILE empty
+# for no logo (the package then builds exactly as before).
+#
+# Preparing the image: export just the logo, tightly cropped, with a transparent
+# background. Add roughly 40-60 px of transparent padding on the sides that touch
+# the window edge (Image > Canvas Size) so it does not hug the border. You do NOT
+# need a full-window canvas or any positioning in Photoshop: the installer places
+# the whole PNG according to LOGO_ALIGNMENT. For a sharp Retina result, make the
+# PNG twice the intended size and set its resolution to 144 ppi.
+#
+# Paths may be absolute or relative to where you run the script.
+LOGO_FILE=""                # e.g. "$HOME/branding/installer_logo.png"
+LOGO_DARK_FILE=""           # optional variant for Dark Mode; if empty, Dark Mode shows no logo
+
+# Where the image sits in the window: center, left, right, top, bottom, topleft,
+# topright, bottomleft, bottomright. (Default if unset: bottomleft.)
+LOGO_ALIGNMENT="bottomleft"
+# tofit = stretch to the window, proportional = scale down to fit, none = native
+# size (recommended). (Default if unset: none.)
+LOGO_SCALING="none"
+
+###############################################################################
 # 5b. SETUP VALUES BAKED INTO THE PACKAGE
 ###############################################################################
-# install.sh is shipped exactly as upstream wrote it; the build never edits it.
-# Instead, these values are baked into the generated postinstall script as
-# command-line arguments, and the postinstall runs:
-#     install.sh -S -U <URL> -u <USERNAME> -p <PASSWORD> [-s if SERVICE] [-n if NOW]
+# These are written into the STAGED copy of install.sh at build time (the source
+# checkout is never modified), and the package's postinstall runs it. Command-line
+# options given to install.sh still override them.
 #
 # RE-INSTALLS: if an agent is already present, install.sh itself runs
 # "uninstall.sh -S -D" first (hard delete: removes the config directory, data
@@ -104,32 +124,30 @@ ENTITLEMENTS_FILE="dart_entitlements.plist"
 # values. The package's postinstall never uninstalls anything. uninstall.sh needs
 # `realpath` (built into recent macOS; check your minimum supported version).
 #
-# SECURITY: the values end up in clear text inside the .pkg (in the postinstall
-# script; install.sh itself holds no credentials), and the .pkg is UPLOADED TO
-# APPLE for notarization. Anyone who can obtain the .pkg (e.g. from the Jamf
-# distribution point) can read them. While install.sh runs on the target Mac, the
-# password is briefly visible in the process list as an argument. Use a dedicated,
-# low-privilege OCS account. Changing any value means rebuilding, re-signing and
-# re-notarizing the package.
+# SECURITY: the values end up in clear text inside the .pkg (in install.sh, mode
+# 0700 root:wheel once installed), and the .pkg is UPLOADED TO APPLE for
+# notarization. Anyone who can obtain the .pkg (e.g. from the Jamf distribution
+# point) can read them. Use a dedicated, low-privilege OCS account. Changing any
+# value means rebuilding, re-signing and re-notarizing the package.
 
 # true  = the postinstall runs install.sh non-interactively with the values below
-#         passed as arguments (URL, USERNAME and PASSWORD are then required).
+#         (URL, USERNAME and PASSWORD are then required).
 # false = the package only installs the files; nothing is configured.
 SILENT="true"
 
-URL=""            # e.g. https://ocs.example.com:443  (must start with http:// or https://)
+URL="https://ocs.nmhschool.org"            # e.g. https://ocs.example.com:443  (must start with http:// or https://)
 USERNAME=""
 # Prefer leaving this as a placeholder and exporting OCS_PASSWORD for the build
 # (the environment variable wins over this value), so the password is not stored here.
 PASSWORD=""
 # URL, USERNAME and PASSWORD must not contain a double quote, a backslash or a
-# line break: the upstream install.sh writes them into config.json without escaping.
+# line break: install.sh writes them into config.json without escaping.
 
 # Optional extras (not part of the four values above). In silent mode install.sh's
 # own defaults are SERVICE=false and NOW=false, i.e. NO LaunchDaemon is registered
 # and nothing runs - the agent would be installed and configured but never scheduled.
-SERVICE="true"             # true = pass -s: register the LaunchDaemon (needs the plist beside install.sh)
-NOW="true"                 # true = pass -n: run one inventory right after install. install.sh then passes the
+SERVICE="true"             # true = register the LaunchDaemon (needs the plist beside install.sh)
+NOW="true"                 # true = run one inventory right after install. install.sh then passes the
                             # values UNQUOTED to a command, so URL/USERNAME/PASSWORD must not contain
                             # whitespace or any of * ? [ $ ` (the build checks), and it writes that
                             # command line - password included - to install.log (the postinstall makes
