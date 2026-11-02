@@ -28,8 +28,8 @@ The repository's `setup/macos` folder (`install.sh`, `uninstall.sh`, `com.ocsinv
 ```
 
 - The package installs **nothing** into `/usr/local/bin`. `install.sh` makes that single copy.
-- `URL`, `USERNAME`, `PASSWORD`, `SILENT` (and optionally `SERVICE`, `NOW`) from the config are embedded in the package's `postinstall` script. It passes them as command-line arguments to the **unmodified** `install.sh`; the source checkout is never modified.
-- The package's `postinstall` runs `install.sh` non-interactively, then verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
+- With `SILENT=true`, the package's `postinstall` passes `URL`, `USERNAME`, `PASSWORD`, and optionally `SERVICE`/`NOW` as command-line arguments to the **unmodified** `install.sh`; the source checkout is never modified. With `SILENT=false`, `postinstall` installs the package files and exits without running setup or `install.sh`.
+- After setup runs, `postinstall` verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
 - The build verifies that the binary appears exactly once in the payload and that the password appears only in the generated `postinstall` script.
 
 ## Requirements

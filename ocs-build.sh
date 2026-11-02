@@ -724,7 +724,7 @@ EOF
   if [ "$DO_NOTARIZE" -eq 1 ]; then
     log "Notarizing ($arch) — this uploads the .pkg to Apple"
     if [ "$SILENT" = "true" ]; then
-      warn "This package contains the OCS URL/USERNAME/PASSWORD (in the staged install.sh) and is being uploaded to Apple for notarization. Use a dedicated low-privilege OCS account."
+      warn "This package contains the OCS URL/USERNAME/PASSWORD (in the postinstall script) and is being uploaded to Apple for notarization. Use a dedicated low-privilege OCS account."
     fi
     local nlog="$stage/notary-submit.log"
     local submit_rc=0
