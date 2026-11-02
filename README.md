@@ -8,11 +8,10 @@ It targets macOS's stock `/bin/bash` 3.2, so no Homebrew bash is needed.
 
 1. Fetches a Dart SDK (SHA-256 verified) or uses the system one
 2. Fetches the `OCSInventory-Agent-Rework` source at a pinned ref (branch, tag, or commit SHA)
-3. Applies small local fixes to the fresh checkout (currently the LaunchDaemon plist, see [Local source fixes](#local-source-fixes))
-4. Runs `dart pub get` and `dart compile exe`
-5. Signs every Mach-O with **Developer ID Application** (hardened runtime, secure timestamp)
-6. Builds the package with `pkgbuild` / `productbuild`, signed with **Developer ID Installer**
-7. Notarizes with `notarytool`, staples, and validates
+3. Runs `dart pub get` and `dart compile exe`, passing the package version to the binary as `-DAPP_VERSION`
+4. Signs every Mach-O with **Developer ID Application** (hardened runtime, secure timestamp)
+5. Builds the package with `pkgbuild` / `productbuild`, signed with **Developer ID Installer**, optionally with an installer background logo
+6. Notarizes with `notarytool`, staples, and validates
 
 A build manifest (SHA-256, source commit, Dart version, etc.) and the resolved `pubspec.lock` are written next to each package.
 
@@ -29,10 +28,9 @@ The repository's `setup/macos` folder (`install.sh`, `uninstall.sh`, `com.ocsinv
 ```
 
 - The package installs **nothing** into `/usr/local/bin`. `install.sh` makes that single copy.
-- **`install.sh` is shipped exactly as upstream wrote it.** The build never edits it and fails if the staged copy differs from the checkout.
-- `URL`, `USERNAME`, `PASSWORD` (and optionally `SERVICE`, `NOW`) from the config are baked into the generated `postinstall` script as command-line arguments. The package's `postinstall` runs `install.sh -S -U <url> -u <user> -p <password> [-s] [-n]` non-interactively. (A `.pkg` cannot receive arguments at install time, so they are fixed at build time. Environment variables cannot be used because `install.sh` resets its variables on startup.)
-- After `install.sh` finishes, `postinstall` verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
-- The build verifies that the binary appears exactly once in the payload and that the credentials appear only in the `postinstall` script.
+- `URL`, `USERNAME`, `PASSWORD`, `SILENT` (and optionally `SERVICE`, `NOW`) from the config are injected into the **staged** copy of `install.sh` at build time. The source checkout is never modified, and command-line options passed to `install.sh` still win.
+- The package's `postinstall` runs `install.sh` non-interactively, then verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
+- The build verifies that the binary appears exactly once in the payload and that the credentials appear only in `install.sh`.
 
 ## Requirements
 
@@ -52,7 +50,7 @@ The repository's `setup/macos` folder (`install.sh`, `uninstall.sh`, `com.ocsinv
 cp ocs-build.conf.example ocs-build.conf
 chmod 600 ocs-build.conf
 
-# 2. Edit ocs-build.conf (identities, notary profile, OCS URL, ...)
+# 2. Edit ocs-build.conf (identities, notary profile, OCS URL, optional logo ...)
 
 # 3. One-time: store notary credentials
 xcrun notarytool store-credentials "ocs-notary" \
@@ -63,7 +61,7 @@ xcrun notarytool store-credentials "ocs-notary" \
 export OCS_PASSWORD='your-ocs-account-password'
 export OCS_P12_PASSWORD='...'      # only if importing .p12 certificates
 
-# 5. Check everything first (tools, certs, notary credentials; builds nothing)
+# 5. Check everything first (tools, certs, notary credentials, logo files; builds nothing)
 ./ocs-build.sh --check
 
 # 6. Build
@@ -83,7 +81,7 @@ ocs-inventory-agent-<version>-arm64.pkg   # actual name: <last part of PKG_IDENT
 | Option | Description |
 |---|---|
 | `--config FILE` | Config file (default: `ocs-build.conf` next to the script) |
-| `--check` | Preflight only: tools, certificates, notary credentials. Builds nothing. |
+| `--check` | Preflight only: tools, certificates, notary credentials, logo files. Builds nothing. |
 | `--no-notarize` | Build and sign only (testing; the result will not pass Gatekeeper as a downloaded file) |
 | `--clean` | Delete `WORK_DIR` before building |
 | `-h`, `--help` | Show help |
@@ -98,7 +96,8 @@ All settings live in `ocs-build.conf` (see [`ocs-build.conf.example`](ocs-build.
 | Certificate location (pick one) | **A)** `APP_CERT_P12` / `INSTALLER_CERT_P12` imported into a temporary keychain; **B)** `SIGNING_KEYCHAIN`; **C)** login keychain (leave both empty) |
 | Notarization (pick one) | **A)** `NOTARY_KEYCHAIN_PROFILE`; **B)** `NOTARY_API_KEY_PATH` / `NOTARY_API_KEY_ID` / `NOTARY_API_ISSUER` |
 | Source / toolchain | `OCS_REPO_URL`, `OCS_REF` (**pin a tag or SHA for production**), `DART_SOURCE` (`download`/`system`), `DART_CHANNEL`, `DART_VERSION` |
-| Package | `TARGET_ARCHS` (`arm64`, `x86_64`), `BINARY_NAME`, `PKG_IDENTIFIER`, `PKG_TITLE`, `PKG_VERSION` (`auto` reads `pubspec.yaml`), `ENTITLEMENTS_FILE` |
+| Package | `TARGET_ARCHS` (`arm64`, `x86_64`), `BINARY_NAME`, `PKG_IDENTIFIER`, `PKG_TITLE`, `PKG_VERSION` (`auto` reads `pubspec.yaml`; also passed to the binary as `APP_VERSION`), `ENTITLEMENTS_FILE` |
+| Installer logo (optional) | `LOGO_FILE`, `LOGO_DARK_FILE`, `LOGO_ALIGNMENT`, `LOGO_SCALING` |
 | Setup values | `SILENT`, `URL`, `USERNAME`, `PASSWORD`, `SERVICE`, `NOW` |
 | Directories | `WORK_DIR`, `OUTPUT_DIR` |
 
@@ -110,19 +109,34 @@ Never put passwords or private keys in the config file. Secrets are read from en
 - `OCS_P12_PASSWORD` (name configurable via `P12_PASSWORD_ENV`) unlocks `.p12` files
 - `SIGNING_KEYCHAIN_PASSWORD_ENV` names the variable holding a keychain's unlock password
 
+### Installer logo
+
+An optional PNG is shown as the installer window's background image. It is off unless `LOGO_FILE` is set.
+
+| Key | Meaning |
+|---|---|
+| `LOGO_FILE` | PNG for the light appearance. Empty = no logo. |
+| `LOGO_DARK_FILE` | Optional PNG for Dark Mode. If empty, Dark Mode shows no logo. |
+| `LOGO_ALIGNMENT` | `center`, `left`, `right`, `top`, `bottom`, `topleft`, `topright`, `bottomleft` (default), `bottomright` |
+| `LOGO_SCALING` | `none` (default, native size), `proportional` (scale down to fit), `tofit` (stretch) |
+
+The build copies the PNGs into a resources folder passed to `productbuild --resources` and references them from `<background>` / `<background-darkAqua>` in `distribution.xml`. Preflight checks that the files exist, are `.png`, and that the alignment and scaling values are valid.
+
+Preparing the image: export only the logo, tightly cropped, with a transparent background, and add about 40–60 px of transparent padding on the sides that touch the window edge so it does not hug the border. No full-window canvas or positioning in Photoshop is needed, because the installer places the whole PNG according to `LOGO_ALIGNMENT`. For a sharp Retina result, make the PNG twice the intended size and set its resolution to 144 ppi. Do a `--no-notarize` build to check how it looks before the final build.
+
 ### Setup values
 
 | Key | Meaning |
 |---|---|
-| `SILENT=true` | The postinstall runs `install.sh` with the baked-in values as arguments (`-S -U -u -p`). `URL`, `USERNAME`, `PASSWORD` are required. |
+| `SILENT=true` | The postinstall runs `install.sh` with the baked-in values. `URL`, `USERNAME`, `PASSWORD` are required. |
 | `SILENT=false` | The package only installs files; nothing is configured. |
-| `SERVICE=true` | Passes `-s` to `install.sh` to register the LaunchDaemon. Without it, silent mode installs and configures the agent but **never schedules it**. |
-| `NOW=true` | Passes `-n` to `install.sh` to run one inventory right after install. |
+| `SERVICE=true` | Register the LaunchDaemon. Without it, silent mode installs and configures the agent but **never schedules it**. |
+| `NOW=true` | Run one inventory right after install. |
 
 Validation rules enforced at build time:
 
 - `URL` must start with `http://` or `https://`
-- `URL`, `USERNAME`, `PASSWORD` must not contain `"`, `\`, or line breaks (the upstream `install.sh` writes them into `config.json` unescaped)
+- `URL`, `USERNAME`, `PASSWORD` must not contain `"`, `\`, or line breaks (`install.sh` writes them into `config.json` unescaped)
 - With `NOW=true` they must also contain no whitespace or any of `* ? [ $ \``, because `install.sh` passes them unquoted to a command
 
 ### Entitlements
@@ -141,26 +155,19 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 
 ## Security notes
 
-- With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`**, in the `postinstall` script. `install.sh` itself contains no credentials.
-- While `install.sh` runs on the target Mac, the password is briefly visible in the process list as a command-line argument.
+- With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`** (in `install.sh`, mode `0700 root:wheel` once installed).
 - The package is **uploaded to Apple** for notarization.
 - Anyone who can obtain the `.pkg` (for example from a Jamf distribution point) can read the credentials.
 - **Use a dedicated, low-privilege OCS account.**
 - Changing any value means rebuilding, re-signing, and re-notarizing.
-- On the target Mac, `config.json` and the setup logs are restricted to root (`0600`; `install.sh`'s `--now` run writes the password into `install.log`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
+- On the target Mac, `config.json` and the setup logs are restricted to root (`0600`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
 - The temporary keychain (when using `.p12` files) is deleted and your keychain search list is restored on exit.
 
-## Local source fixes
+## Older `install.sh` versions
 
-Right after the source is fetched, and before anything is compiled or staged, the build applies small fixes to the checkout (`apply_source_fixes` in `ocs-build.sh`). The packaging code does not know about them; it just uses whatever is in the checkout, so you can tweak the code without touching the package build.
+Some older revisions of `install.sh` referenced `$plist_source_file`, a local variable of `register_service()`, from `check_installed_agent()`. Under `set -u`, that aborted silent mode whenever an existing agent was found, so re-installs failed while fresh installs worked.
 
-| Fix | What it does |
-|---|---|
-| LaunchDaemon plist ([upstream issue #175](https://github.com/OCSInventory-NG/OCSInventory-Agent-Rework/issues/175)) | Changes `<string>--service true</string>` to `<string>--service=true</string>` in `setup/macos/com.ocsinventory.agent.plist`, because upstream passes it as a single argument the agent cannot parse. |
-
-The plist fix is idempotent. If the plist already uses `--service=true`, it does nothing. If neither form is found, it prints a warning and leaves the file unchanged. After patching it checks the result and runs `plutil -lint`.
-
-To add another fix, write a function in the "Source" section of `ocs-build.sh` and call it from `apply_source_fixes`. Keep each fix idempotent.
+Current `main` no longer has this problem: `check_installed_agent()` uses the global `PLIST_DST`. The build still runs `check_install_sh_layout` and prints a warning if the pinned `OCS_REF` contains the old pattern. If you see that warning, build from a newer ref or a commit that includes the fix.
 
 ## Troubleshooting
 
@@ -173,9 +180,8 @@ To add another fix, write a function in the "Source" section of `ocs-build.sh` a
 | Notarization not `Accepted` | The script prints Apple's log automatically; check for unsigned or missing hardened-runtime Mach-O files |
 | `x86_64 build on Apple silicon needs Rosetta` | `softwareupdate --install-rosetta --agree-to-license` |
 | `SHA-256 mismatch` for the Dart SDK | Re-run with `--clean`; check for proxy interference |
-| `Staged install.sh differs from the upstream copy` | Something modified `setup/macos/install.sh` between checkout and staging. The build requires it to be unmodified. |
-| Warning: plist has no `--service` argument in the expected form | Upstream changed the plist. Review `setup/macos/com.ocsinventory.agent.plist` in the checkout and update `fix_plist_service_arg` or remove it. |
-| `Credential placement check failed` | The password was found somewhere other than the `postinstall` script, for example because it is a short string that also appears in another file. |
+| `Logo file not found` / `Logo must be a PNG file` | Check `LOGO_FILE` / `LOGO_DARK_FILE` paths and that they end in `.png` |
+| Logo looks too big, small or soft | Resize the PNG (use 2x size at 144 ppi for Retina) and rebuild; keep `LOGO_SCALING="none"` |
 
 ## Repository layout
 
