@@ -520,8 +520,12 @@ fi
 # --- run install.sh ---------------------------------------------------------------------------
 cd "$SETUP" || { log "ERROR: cannot cd to $SETUP"; exit 1; }
 log "Running install.sh (non-interactive; stdin closed; arguments are not logged)."
-/bin/bash ./install.sh "${INSTALL_ARGS[@]}" < /dev/null >> "$LOG_FILE" 2>&1
-rc=$?
+rc=0
+if /bin/bash ./install.sh "${INSTALL_ARGS[@]}" < /dev/null >> "$LOG_FILE" 2>&1; then
+  :
+else
+  rc=$?
+fi
 # install.sh's --now path writes the full agent command line, password included, to
 # install.log. Keep the setup logs readable by root only.
 for lf in "$SETUP/install.log" "$SETUP/uninstall.log"; do
@@ -693,15 +697,22 @@ EOF
       warn "This package contains the OCS URL/USERNAME/PASSWORD (in the postinstall script) and is being uploaded to Apple for notarization. Use a dedicated low-privilege OCS account."
     fi
     local nlog="$stage/notary-submit.log"
-    xcrun notarytool submit "$final" ${notary_auth[@]+"${notary_auth[@]}"} --wait 2>&1 | tee "$nlog"
-    if ! grep -E '^[[:space:]]*status:[[:space:]]*Accepted' "$nlog" >/dev/null; then
+    local submit_rc=0
+    # Put the pipeline in an if condition so set -e/pipefail do not exit before
+    # we can inspect notarytool's output and retrieve Apple's diagnostic log.
+    if xcrun notarytool submit "$final" ${notary_auth[@]+"${notary_auth[@]}"} --wait 2>&1 | tee "$nlog"; then
+      :
+    else
+      submit_rc=$?
+    fi
+    if [ "$submit_rc" -ne 0 ] || ! grep -E '^[[:space:]]*status:[[:space:]]*Accepted' "$nlog" >/dev/null; then
       local sid
       sid="$(sed -n 's/^[[:space:]]*id:[[:space:]]*\([0-9a-fA-F-]\{36\}\).*/\1/p' "$nlog" | head -n1)"
       if [ -n "$sid" ]; then
         warn "Notarization was not accepted. Fetching Apple's log for $sid:"
         xcrun notarytool log "$sid" ${notary_auth[@]+"${notary_auth[@]}"} || true
       fi
-      die "Notarization did not return Accepted for $arch."
+      die "Notarization did not return Accepted for $arch (notarytool submit exit status $submit_rc)."
     fi
     xcrun stapler staple "$final"
     xcrun stapler validate "$final"

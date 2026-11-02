@@ -28,9 +28,9 @@ The repository's `setup/macos` folder (`install.sh`, `uninstall.sh`, `com.ocsinv
 ```
 
 - The package installs **nothing** into `/usr/local/bin`. `install.sh` makes that single copy.
-- `URL`, `USERNAME`, `PASSWORD`, `SILENT` (and optionally `SERVICE`, `NOW`) from the config are injected into the **staged** copy of `install.sh` at build time. The source checkout is never modified, and command-line options passed to `install.sh` still win.
+- `URL`, `USERNAME`, `PASSWORD`, `SILENT` (and optionally `SERVICE`, `NOW`) from the config are embedded in the package's `postinstall` script. It passes them as command-line arguments to the **unmodified** `install.sh`; the source checkout is never modified.
 - The package's `postinstall` runs `install.sh` non-interactively, then verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
-- The build verifies that the binary appears exactly once in the payload and that the credentials appear only in `install.sh`.
+- The build verifies that the binary appears exactly once in the payload and that the password appears only in the generated `postinstall` script.
 
 ## Requirements
 
@@ -128,7 +128,7 @@ Preparing the image: export only the logo, tightly cropped, with a transparent b
 
 | Key | Meaning |
 |---|---|
-| `SILENT=true` | The postinstall runs `install.sh` with the baked-in values. `URL`, `USERNAME`, `PASSWORD` are required. |
+| `SILENT=true` | The package's `postinstall` passes the baked-in values to `install.sh`. `URL`, `USERNAME`, `PASSWORD` are required. |
 | `SILENT=false` | The package only installs files; nothing is configured. |
 | `SERVICE=true` | Register the LaunchDaemon. Without it, silent mode installs and configures the agent but **never schedules it**. |
 | `NOW=true` | Run one inventory right after install. |
@@ -155,9 +155,9 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 
 ## Security notes
 
-- With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`** (in `install.sh`, mode `0700 root:wheel` once installed).
+- With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`**, embedded in its `postinstall` script. The values are passed as arguments to `install.sh` when the package is installed.
 - The package is **uploaded to Apple** for notarization.
-- Anyone who can obtain the `.pkg` (for example from a Jamf distribution point) can read the credentials.
+- Anyone who can obtain the `.pkg` (for example from a Jamf distribution point) can read the credentials from the `postinstall` script.
 - **Use a dedicated, low-privilege OCS account.**
 - Changing any value means rebuilding, re-signing, and re-notarizing.
 - On the target Mac, `config.json` and the setup logs are restricted to root (`0600`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
