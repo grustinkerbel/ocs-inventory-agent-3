@@ -137,16 +137,19 @@ LOGO_SCALING="none"
 # true  = the postinstall runs install.sh non-interactively with the values below
 #         (URL, USERNAME and PASSWORD are then required).
 # false = the package only installs the files; nothing is configured.
-SILENT="true"
 
+# URL, USERNAME and PASSWORD must not contain a double quote, a backslash or a
+# line break: install.sh writes them into config.json without escaping.
+
+SILENT="true"
 URL="https://ocs.nmhschool.org"            # e.g. https://ocs.example.com:443  (must start with http:// or https://)
 USERNAME=""
+
 # Prefer leaving this as a placeholder and exporting OCS_PASSWORD for the build
 # (the environment variable wins over this value), so the password is not stored
 # in this config file. It will still be included in the package when SILENT=true.
 PASSWORD=""
-# URL, USERNAME and PASSWORD must not contain a double quote, a backslash or a
-# line break: install.sh writes them into config.json without escaping.
+
 
 # Optional extras (not part of the four values above). In silent mode install.sh's
 # own defaults are SERVICE=false and NOW=false, i.e. NO LaunchDaemon is registered
