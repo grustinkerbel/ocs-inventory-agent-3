@@ -381,6 +381,39 @@ fetch_source() {
   fi
 }
 
+# Local fixes applied to the checkout right after it is fetched, before anything is
+# compiled or staged. The packaging code below never knows about them: it just takes
+# whatever is in $SRC_DIR. Add further tweaks here (keep them idempotent).
+#
+# Fix 1: upstream issue #175 - the LaunchDaemon plist passes "--service true" as ONE
+# argv element, which the agent cannot parse. It must be "--service=true".
+fix_plist_service_arg() {
+  local f="$SRC_DIR/setup/macos/$PLIST_NAME"
+  if [ ! -f "$f" ]; then
+    warn "Source fix skipped: $f not found."
+    return 0
+  fi
+  if grep -qF '<string>--service true</string>' "$f"; then
+    sed 's|<string>--service true</string>|<string>--service=true</string>|' "$f" > "$f.new" \
+      || die "Patching $PLIST_NAME failed."
+    mv "$f.new" "$f"
+    grep -qF '<string>--service=true</string>' "$f" || die "Plist patch did not apply to $f."
+    grep -qF '<string>--service true</string>' "$f" && die "Old '--service true' still present in $f."
+    plutil -lint "$f" >/dev/null || die "$PLIST_NAME is not a valid plist after patching."
+    info "Patched $PLIST_NAME: '--service true' -> '--service=true' (upstream issue #175)."
+  elif grep -qF '<string>--service=true</string>' "$f"; then
+    info "$PLIST_NAME already uses '--service=true'; nothing to patch."
+  else
+    warn "$PLIST_NAME has no '--service' argument in the expected form; left unchanged. Review the plist."
+  fi
+}
+
+apply_source_fixes() {
+  log "Applying local source fixes"
+  fix_plist_service_arg
+}
+
+
 ###############################################################################
 # Build / sign / package per architecture
 ###############################################################################
@@ -784,6 +817,7 @@ fi
 log "Resolving toolchain"
 if [ "$DART_SOURCE" = "download" ]; then resolve_dart_version; else DART_VERSION_RESOLVED="system"; fi
 fetch_source
+apply_source_fixes
 PKG_VERSION_RESOLVED=""
 resolve_pkg_version
 
