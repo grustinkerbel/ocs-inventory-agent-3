@@ -101,8 +101,8 @@ ENTITLEMENTS_FILE="dart_entitlements.plist"
 # PNG twice the intended size and set its resolution to 144 ppi.
 #
 # Paths may be absolute or relative to where you run the script.
-LOGO_FILE=""                # e.g. "$HOME/branding/installer_logo.png"
-LOGO_DARK_FILE=""           # optional variant for Dark Mode; if empty, Dark Mode shows no logo
+LOGO_FILE="installer_logo.png"                # e.g. "$HOME/branding/installer_logo.png"
+LOGO_DARK_FILE="installer_logo.png"           # optional variant for Dark Mode; if empty, Dark Mode shows no logo
 
 # Where the image sits in the window: center, left, right, top, bottom, topleft,
 # topright, bottomleft, bottomright. (Default if unset: bottomleft.)
@@ -112,11 +112,13 @@ LOGO_ALIGNMENT="bottomleft"
 LOGO_SCALING="none"
 
 ###############################################################################
-# 5b. SETUP VALUES BAKED INTO THE PACKAGE
+# 5b. SETUP VALUES PASSED BY THE PACKAGE
 ###############################################################################
-# These are written into the STAGED copy of install.sh at build time (the source
-# checkout is never modified), and the package's postinstall runs it. Command-line
-# options given to install.sh still override them.
+# For SILENT=true, the build writes URL, USERNAME, PASSWORD, and the optional
+# SERVICE/NOW flags as shell-escaped arguments in the package's postinstall
+# script. At install time, postinstall passes them to the unmodified upstream
+# install.sh. SILENT controls whether setup runs. The source checkout is never
+# modified.
 #
 # RE-INSTALLS: if an agent is already present, install.sh itself runs
 # "uninstall.sh -S -D" first (hard delete: removes the config directory, data
@@ -124,11 +126,13 @@ LOGO_SCALING="none"
 # values. The package's postinstall never uninstalls anything. uninstall.sh needs
 # `realpath` (built into recent macOS; check your minimum supported version).
 #
-# SECURITY: the values end up in clear text inside the .pkg (in install.sh, mode
-# 0700 root:wheel once installed), and the .pkg is UPLOADED TO APPLE for
-# notarization. Anyone who can obtain the .pkg (e.g. from the Jamf distribution
-# point) can read them. Use a dedicated, low-privilege OCS account. Changing any
-# value means rebuilding, re-signing and re-notarizing the package.
+# SECURITY: values used for silent setup are present in clear text inside the
+# .pkg's postinstall script, and the .pkg is UPLOADED TO APPLE for notarization.
+# Anyone who can obtain the .pkg (e.g. from the Jamf distribution point) can
+# read them. Supplying PASSWORD through OCS_PASSWORD keeps it out of this config
+# file, but does not keep it out of the package. Use a dedicated, low-privilege
+# OCS account. Changing any value means rebuilding, re-signing and re-notarizing
+# the package.
 
 # true  = the postinstall runs install.sh non-interactively with the values below
 #         (URL, USERNAME and PASSWORD are then required).
@@ -138,7 +142,8 @@ SILENT="true"
 URL="https://ocs.nmhschool.org"            # e.g. https://ocs.example.com:443  (must start with http:// or https://)
 USERNAME=""
 # Prefer leaving this as a placeholder and exporting OCS_PASSWORD for the build
-# (the environment variable wins over this value), so the password is not stored here.
+# (the environment variable wins over this value), so the password is not stored
+# in this config file. It will still be included in the package when SILENT=true.
 PASSWORD=""
 # URL, USERNAME and PASSWORD must not contain a double quote, a backslash or a
 # line break: install.sh writes them into config.json without escaping.
