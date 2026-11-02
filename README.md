@@ -103,7 +103,7 @@ All settings live in `ocs-build.conf` (see [`ocs-build.conf.example`](ocs-build.
 
 ### Secrets
 
-Never put passwords or private keys in the config file. Secrets are read from environment variables:
+Keep passwords and private keys out of the config file. For the OCS password, export `OCS_PASSWORD`; it overrides `PASSWORD` from the config. The build writes the resolved setup values into the generated `postinstall` script, so supplying the password through the environment does **not** keep it out of the `.pkg`.
 
 - `OCS_PASSWORD` overrides `PASSWORD`
 - `OCS_P12_PASSWORD` (name configurable via `P12_PASSWORD_ENV`) unlocks `.p12` files
@@ -162,12 +162,6 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 - Changing any value means rebuilding, re-signing, and re-notarizing.
 - On the target Mac, `config.json` and the setup logs are restricted to root (`0600`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
 - The temporary keychain (when using `.p12` files) is deleted and your keychain search list is restored on exit.
-
-## Older `install.sh` versions
-
-Some older revisions of `install.sh` referenced `$plist_source_file`, a local variable of `register_service()`, from `check_installed_agent()`. Under `set -u`, that aborted silent mode whenever an existing agent was found, so re-installs failed while fresh installs worked.
-
-Current `main` no longer has this problem: `check_installed_agent()` uses the global `PLIST_DST`. The build still runs `check_install_sh_layout` and prints a warning if the pinned `OCS_REF` contains the old pattern. If you see that warning, build from a newer ref or a commit that includes the fix.
 
 ## Troubleshooting
 
