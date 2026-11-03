@@ -205,16 +205,27 @@ validate_setup_values() {
   case "$URL$USERNAME$PASSWORD" in
     *$'\n'*|*$'\r'*) die "URL, USERNAME and PASSWORD must not contain line breaks." ;;
   esac
-  # --now makes install.sh run the agent with the values pasted UNQUOTED into a command
+  # NOW (-n) only matters when no service is registered: the LaunchDaemon reports once
+  # when it starts (verified), so -n with SERVICE=true adds nothing. It is therefore
+  # never passed together with -s (see build_install_args).
+  if [ "$SERVICE" = "true" ] && [ "$NOW" = "true" ]; then
+    warn "NOW=true is redundant with SERVICE=true: the service reports when it starts. -n will not be passed."
+    NOW="false"
+  fi
+  # -n makes install.sh run the agent with the values pasted UNQUOTED into a command
   # string (word splitting and globbing apply; older versions of the script used eval).
   if [ "$NOW" = "true" ]; then
     case "$URL$USERNAME$PASSWORD" in
       *[[:space:]]*|*'*'*|*'?'*|*'['*|*'$'*|*'`'*)
-        die "With NOW=true, URL/USERNAME/PASSWORD must not contain whitespace or any of * ? [ \$ \` (install.sh passes them unquoted to a command)." ;;
+        die "With NOW=true (and SERVICE=false), URL/USERNAME/PASSWORD must not contain whitespace or any of * ? [ \$ \` (install.sh passes them unquoted to a command)." ;;
     esac
   fi
   if [ "$SERVICE" != "true" ]; then
-    warn "SERVICE=false: in silent mode install.sh then registers NO LaunchDaemon, so the agent is installed and configured but never scheduled. Set SERVICE=true in $CONFIG_FILE if the agent should run."
+    if [ "$NOW" = "true" ]; then
+      warn "SERVICE=false, NOW=true: install.sh registers NO LaunchDaemon and runs one inventory at install time; nothing is scheduled afterwards. Set SERVICE=true in $CONFIG_FILE if the agent should keep reporting."
+    else
+      warn "SERVICE=false, NOW=false: install.sh registers NO LaunchDaemon and runs no inventory, so the agent is installed and configured but never reports. Set SERVICE=true in $CONFIG_FILE if the agent should run."
+    fi
   fi
 }
 
@@ -456,8 +467,13 @@ build_install_args() {
   INSTALL_ARGS=()
   if [ "$SILENT" = "true" ]; then
     INSTALL_ARGS=(-S -U "$URL" -u "$USERNAME" -p "$PASSWORD")
-    if [ "$SERVICE" = "true" ]; then INSTALL_ARGS+=(-s); fi
-    if [ "$NOW" = "true" ]; then INSTALL_ARGS+=(-n); fi
+    # -s registers the LaunchDaemon, which reports once when it starts. -n (run an
+    # inventory now) is only for the no-service case; with -s it is never passed.
+    if [ "$SERVICE" = "true" ]; then
+      INSTALL_ARGS+=(-s)
+    elif [ "$NOW" = "true" ]; then
+      INSTALL_ARGS+=(-n)
+    fi
   fi
 }
 
