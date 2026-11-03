@@ -151,12 +151,17 @@ PASSWORD=""
 # Optional extras (not part of the four values above). In silent mode install.sh's
 # own defaults are SERVICE=false and NOW=false, i.e. NO LaunchDaemon is registered
 # and nothing runs - the agent would be installed and configured but never scheduled.
-SERVICE="true"             # true = register the LaunchDaemon (needs the plist beside install.sh)
-NOW="true"                 # true = run one inventory right after install. install.sh then passes the
-                            # values UNQUOTED to a command, so URL/USERNAME/PASSWORD must not contain
+SERVICE="true"             # true = register the LaunchDaemon (needs the plist beside install.sh).
+                            # The service reports once when it starts, then on the schedule set
+                            # by the OCS server.
+NOW="false"                # Only used when SERVICE=false: run one inventory at install time
+                            # (nothing is scheduled afterwards). With SERVICE=true it is ignored
+                            # (the build warns), because the service already reports on start.
+                            # With NOW=true and SERVICE=false, install.sh passes the values
+                            # UNQUOTED to a command, so URL/USERNAME/PASSWORD must not contain
                             # whitespace or any of * ? [ $ ` (the build checks), and it writes that
-                            # command line - password included - to install.log (the postinstall makes
-                            # the setup logs root-only).
+                            # command line - password included - to install.log (the postinstall
+                            # makes the setup logs root-only).
 
 ###############################################################################
 # 6. DIRECTORIES

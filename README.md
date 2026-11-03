@@ -130,14 +130,20 @@ Preparing the image: export only the logo, tightly cropped, with a transparent b
 |---|---|
 | `SILENT=true` | The package's `postinstall` passes the baked-in values to `install.sh`. `URL`, `USERNAME`, `PASSWORD` are required. |
 | `SILENT=false` | The package only installs files; nothing is configured. |
-| `SERVICE=true` | Register the LaunchDaemon. Without it, silent mode installs and configures the agent but **never schedules it**. |
-| `NOW=true` | Run one inventory right after install. |
+| `SERVICE=true` | Register the LaunchDaemon. The service reports once when it starts, then on the schedule set by the OCS server. Without it, silent mode installs and configures the agent but **never schedules it**. |
+| `NOW=true` | Only used when `SERVICE=false`: run one inventory at install time (nothing is scheduled afterwards). With `SERVICE=true` it is ignored, with a build warning, because the service already reports on start. |
+
+| `SERVICE` | `NOW` | Result |
+|---|---|---|
+| `false` | `false` | Installed and configured; no daemon, no report |
+| `false` | `true` | One-shot inventory at install; nothing scheduled afterwards |
+| `true` | any | Daemon registered; reports once on start, then on the server's schedule (`-n` is never passed) |
 
 Validation rules enforced at build time:
 
 - `URL` must start with `http://` or `https://`
 - `URL`, `USERNAME`, `PASSWORD` must not contain `"`, `\`, or line breaks (`install.sh` writes them into `config.json` unescaped)
-- With `NOW=true` they must also contain no whitespace or any of `* ? [ $ \``, because `install.sh` passes them unquoted to a command
+- With `NOW=true` and `SERVICE=false` they must also contain no whitespace or any of `* ? [ $ \``, because `install.sh` passes them unquoted to a command (`-n` is not used with the service, so this does not apply when `SERVICE=true`)
 
 ### Entitlements
 
