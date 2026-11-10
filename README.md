@@ -32,6 +32,10 @@ The repository's `setup/macos` folder (`install.sh`, `uninstall.sh`, `com.ocsinv
 - After setup runs, `postinstall` verifies that `/usr/local/bin/ocsinventory-cli` is byte-identical to the signed binary in the package and passes `codesign --verify`.
 - The build verifies that the binary appears exactly once in the payload and that the password appears only in the generated `postinstall` script.
 
+### Local source fix: LaunchDaemon plist
+
+Right after fetching the source, the build patches `setup/macos/com.ocsinventory.agent.plist` in the checkout: `<string>--service true</string>` becomes `<string>--service=true</string>`. Upstream issue #175: the original passes `--service true` as one argv element, which the agent cannot parse. The patch is idempotent and skipped if upstream has already fixed it, so the plist in the package may differ from the repository's copy. `install.sh` itself is never patched.
+
 ## Requirements
 
 - macOS with Xcode Command Line Tools (`xcode-select --install`), including `notarytool` (Xcode 13+)
@@ -120,7 +124,7 @@ An optional PNG is shown as the installer window's background image. It is off u
 | `LOGO_ALIGNMENT` | `center`, `left`, `right`, `top`, `bottom`, `topleft`, `topright`, `bottomleft` (default), `bottomright` |
 | `LOGO_SCALING` | `none` (default, native size), `proportional` (scale down to fit), `tofit` (stretch) |
 
-The build copies the PNGs into a resources folder passed to `productbuild --resources` and references them from `<background>` / `<background-darkAqua>` in `distribution.xml`. Preflight checks that the files exist, are `.png`, and that the alignment and scaling values are valid.
+The build copies the PNGs into a resources folder passed to `productbuild --resources` and references them from `<background>` / `<background-darkAqua>` in `distribution.xml`. Preflight checks that the files exist, have a `.png` extension and are really PNG images, and that the alignment and scaling values are valid. Relative paths (also for `ENTITLEMENTS_FILE`) are resolved against the directory containing `ocs-build.sh`, so the script works from any working directory.
 
 Preparing the image: export only the logo, tightly cropped, with a transparent background, and add about 40–60 px of transparent padding on the sides that touch the window edge so it does not hug the border. No full-window canvas or positioning in Photoshop is needed, because the installer places the whole PNG according to `LOGO_ALIGNMENT`. For a sharp Retina result, make the PNG twice the intended size and set its resolution to 144 ppi. Do a `--no-notarize` build to check how it looks before the final build.
 
@@ -162,12 +166,18 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 ## Security notes
 
 - With `SILENT=true`, the OCS URL, username, and password are stored **in clear text inside the `.pkg`**, embedded in its `postinstall` script. The values are passed as arguments to `install.sh` when the package is installed.
+- The credentials are **not left on the target Mac** by the package: `install.sh` ships unmodified, and the `postinstall` script that carries the values is discarded after installation. They end up only in `config.json` (root-only, `0600`) and, with `NOW=true`, in the root-only setup logs.
+- While `install.sh` runs, the password is on its command line (`-p <password>`), so any local user can see it in `ps` for those few seconds.
 - The package is **uploaded to Apple** for notarization.
 - Anyone who can obtain the `.pkg` (for example from a Jamf distribution point) can read the credentials from the `postinstall` script.
 - **Use a dedicated, low-privilege OCS account.**
 - Changing any value means rebuilding, re-signing, and re-notarizing.
 - On the target Mac, `config.json` and the setup logs are restricted to root (`0600`), and `/var/log/ocsinventory-agent-pkg-install.log` records the install.
 - The temporary keychain (when using `.p12` files) is deleted and your keychain search list is restored on exit.
+
+## Older `install.sh` versions
+
+Some older revisions of `install.sh` referenced `$plist_source_file`, a local variable of `register_service()`, from `check_installed_agent()`. Under `set -u`, that aborted silent mode whenever an existing agent was found, so re-installs failed while fresh installs worked. The build still runs `check_install_sh_layout` on the staged `install.sh` (detection only, no edits) and prints a warning if the pinned `OCS_REF` contains the old pattern. If you see it, build from a newer ref or a commit that includes the fix.
 
 ## Troubleshooting
 
@@ -180,7 +190,7 @@ If an agent is already present, `install.sh` itself runs `uninstall.sh -S -D` fi
 | Notarization not `Accepted` | The script prints Apple's log automatically; check for unsigned or missing hardened-runtime Mach-O files |
 | `x86_64 build on Apple silicon needs Rosetta` | `softwareupdate --install-rosetta --agree-to-license` |
 | `SHA-256 mismatch` for the Dart SDK | Re-run with `--clean`; check for proxy interference |
-| `Logo file not found` / `Logo must be a PNG file` | Check `LOGO_FILE` / `LOGO_DARK_FILE` paths and that they end in `.png` |
+| `Logo file not found` / `Logo must be a PNG file` / `not a real PNG image` | Check `LOGO_FILE` / `LOGO_DARK_FILE` paths; they must be genuine PNG files ending in `.png` |
 | Logo looks too big, small or soft | Resize the PNG (use 2x size at 144 ppi for Retina) and rebuild; keep `LOGO_SCALING="none"` |
 
 ## Repository layout

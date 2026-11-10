@@ -100,9 +100,11 @@ ENTITLEMENTS_FILE="dart_entitlements.plist"
 # the whole PNG according to LOGO_ALIGNMENT. For a sharp Retina result, make the
 # PNG twice the intended size and set its resolution to 144 ppi.
 #
-# Paths may be absolute or relative to where you run the script.
-LOGO_FILE="installer_logo.png"                # e.g. "$HOME/branding/installer_logo.png"
-LOGO_DARK_FILE="installer_logo.png"           # optional variant for Dark Mode; if empty, Dark Mode shows no logo
+# Paths may be absolute or relative to the directory containing ocs-build.sh
+# (the same applies to ENTITLEMENTS_FILE).
+LOGO_FILE=""                # e.g. "$HOME/branding/installer_logo.png"
+LOGO_DARK_FILE=""           # optional variant for Dark Mode (use artwork with good contrast on a
+                            # dark background); if empty, Dark Mode shows no logo
 
 # Where the image sits in the window: center, left, right, top, bottom, topleft,
 # topright, bottomleft, bottomright. (Default if unset: bottomleft.)
@@ -128,6 +130,9 @@ LOGO_SCALING="none"
 #
 # SECURITY: values used for silent setup are present in clear text inside the
 # .pkg's postinstall script, and the .pkg is UPLOADED TO APPLE for notarization.
+# At install time the password is passed to install.sh as "-p <password>", so it is
+# briefly visible in the process list (ps) on the target Mac; it is not left on disk
+# there by the package (the postinstall script is discarded after the install).
 # Anyone who can obtain the .pkg (e.g. from the Jamf distribution point) can
 # read them. Supplying PASSWORD through OCS_PASSWORD keeps it out of this config
 # file, but does not keep it out of the package. Use a dedicated, low-privilege
@@ -139,7 +144,7 @@ LOGO_SCALING="none"
 # false = the package only installs the files; nothing is configured.
 SILENT="true"
 
-URL="https://ocs.nmhschool.org"            # e.g. https://ocs.example.com:443  (must start with http:// or https://)
+URL="https://ocs.example.com"              # e.g. https://ocs.example.com:443  (must start with http:// or https://)
 USERNAME=""
 # Prefer leaving this as a placeholder and exporting OCS_PASSWORD for the build
 # (the environment variable wins over this value), so the password is not stored

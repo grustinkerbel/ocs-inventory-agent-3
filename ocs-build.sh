@@ -21,6 +21,10 @@
 # USERNAME, PASSWORD (and optionally SERVICE, NOW) from ocs-build.conf are baked
 # into generated postinstall arguments, and postinstall runs install.sh with them.
 #
+# Security note: the password is passed to install.sh as "-p <password>", so it is
+# visible in the process list (ps) for the few seconds install.sh runs. It is not
+# stored on the target Mac afterwards (the postinstall script is discarded).
+#
 # Targets macOS's stock /bin/bash 3.2 — keep it that way (no bash 4 features).
 # Settings live in ocs-build.conf. See --help.
 
@@ -93,6 +97,18 @@ fi
 # The password may be supplied through the environment instead of the config file.
 if [ -n "${OCS_PASSWORD:-}" ]; then PASSWORD="$OCS_PASSWORD"; fi
 : "${WORK_DIR:=$HOME/ocs-build-work}" "${OUTPUT_DIR:=$HOME/ocs-build-out}"
+
+# Relative file paths in the config are resolved against the script's directory,
+# not the current directory, so the script works from anywhere.
+abs_from_script() {
+  case "$1" in
+    ""|/*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$SCRIPT_DIR" "$1" ;;
+  esac
+}
+ENTITLEMENTS_FILE="$(abs_from_script "$ENTITLEMENTS_FILE")"
+LOGO_FILE="$(abs_from_script "$LOGO_FILE")"
+LOGO_DARK_FILE="$(abs_from_script "$LOGO_DARK_FILE")"
 
 ###############################################################################
 # Cleanup / temporary keychain handling
@@ -283,6 +299,7 @@ preflight() {
     [ -n "$lf" ] || continue
     [ -f "$lf" ] || die "Logo file not found: $lf"
     case "$lf" in *.png|*.PNG) ;; *) die "Logo must be a PNG file: $lf" ;; esac
+    file -b "$lf" | grep -q 'PNG image' || die "Logo is not a real PNG image (wrong content for its extension): $lf"
   done
   case "$LOGO_ALIGNMENT" in
     center|left|right|top|bottom|topleft|topright|bottomleft|bottomright) ;;
@@ -462,6 +479,18 @@ find_credential_files() {
   grep -rlF -e "$PASSWORD" -e "$pw_q" "$@" 2>/dev/null || true
 }
 
+check_install_sh_layout() {
+  # Warn about a latent problem in older upstream install.sh revisions: a reference to
+  # the local variable $plist_source_file outside register_service(). With "set -u" that
+  # aborts silent runs on a Mac that already has an agent. Detection only; install.sh
+  # is never modified.
+  local f="$1" rs
+  rs="$(grep -n '^register_service()' "$f" | head -n1 | cut -d: -f1)"
+  if [ -n "$rs" ] && awk -v rs="$rs" 'NR < rs && /plist_source_file/ && $0 !~ /^[[:space:]]*#/ { found = 1 } END { exit !found }' "$f"; then
+    warn "install.sh uses \$plist_source_file before register_service() defines it (see check_installed_agent). Under 'set -u' install.sh aborts at that line whenever its silent mode finds an existing agent, so re-installing over an existing agent fails. Fresh installs are unaffected. Build from a newer OCS_REF that includes the fix."
+  fi
+}
+
 INSTALL_ARGS=()
 build_install_args() {
   INSTALL_ARGS=()
@@ -548,7 +577,7 @@ fi
 # --- run install.sh ---------------------------------------------------------------------------
 cd "$SETUP" || { log "ERROR: cannot cd to $SETUP"; exit 1; }
 log "Running install.sh (non-interactive; stdin closed; arguments are not logged)."
-/bin/bash ./install.sh "${INSTALL_ARGS[@]}" < /dev/null >> "$LOG_FILE" 2>&1
+./install.sh "${INSTALL_ARGS[@]}" < /dev/null >> "$LOG_FILE" 2>&1
 rc=$?
 # install.sh's --now path writes the full agent command line, password included, to
 # install.log. Keep the setup logs readable by root only.
@@ -626,6 +655,7 @@ build_arch() {
   [ -f "$setup_dst/$PLIST_NAME" ] && chmod 0644 "$setup_dst/$PLIST_NAME"
 
   # install.sh ships exactly as upstream wrote it: no injection, no edits.
+  check_install_sh_layout "$setup_dst/install.sh"
   cmp -s "$SRC_DIR/setup/macos/install.sh" "$setup_dst/install.sh" \
     || die "Staged install.sh differs from the upstream copy; it must not be modified."
   build_install_args
